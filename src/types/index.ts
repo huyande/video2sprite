@@ -82,6 +82,15 @@ export interface SpriteSheetJSON {
   animations: Record<string, string[]>
 }
 
+/** 色键面板工具模式 */
+export type ChromaKeyToolMode = 'picker' | 'restore-brush'
+
+/** 画笔配置 */
+export interface BrushConfig {
+  size: number       // 画笔半径，单位：图像像素，默认 10
+  hardness: number   // 硬度 0-100，控制边缘羽化程度，默认 80
+}
+
 /** 动画播放状态 */
 export interface PlayerState {
   isPlaying: boolean

@@ -12,6 +12,7 @@ import { useCrop } from '../../composables/useCrop'
 import { useChromaKey } from '../../composables/useChromaKey'
 import { useAnimationPlayer } from '../../composables/useAnimationPlayer'
 import { useSpriteExporter } from '../../composables/useSpriteExporter'
+import { useBrushEdit } from '../../composables/useBrushEdit'
 
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import type { ExtractedFrame, VideoMeta } from '../../types'
@@ -51,6 +52,22 @@ const {
   downloadSpriteSheet,
 } = useSpriteExporter()
 
+const {
+  toolMode: brushToolMode,
+  brushConfig,
+  canUndo,
+  canRedo,
+  setToolMode,
+  resetHistory,
+  undo,
+  redo,
+  restoreStroke,
+  finishStroke,
+  pushHistory,
+  updateHistoryFlags,
+  propagateBrushEdits,
+} = useBrushEdit()
+
 // ---- Video State ----
 const videoElement = ref<HTMLVideoElement | null>(null)
 const videoMeta = ref<VideoMeta | null>(null)
@@ -74,6 +91,9 @@ const selectedFrames = computed(() => {
   if (selectedFrameIds.value.size === 0) return frames.value
   return frames.value.filter((f) => selectedFrameIds.value.has(f.id))
 })
+
+/** 当前有效帧（带兜底，与 CropPanel 一致） */
+const effectiveFrame = computed(() => currentSelectedFrame.value || frames.value[0] || null)
 
 const selectedCount = computed(() => selectedFrameIds.value.size)
 
@@ -190,6 +210,7 @@ function onFrameSelect(frameId: string) {
   const frame = frames.value.find((f) => f.id === frameId)
   if (frame) {
     currentSelectedFrame.value = frame
+    resetHistory() // 切换帧时重置画笔历史
   }
 }
 
@@ -202,11 +223,56 @@ function onSelectAll() {
 }
 
 async function onApplyChromaKey() {
+  // 保存当前帧的画笔编辑数据（processAllFrames 会覆盖所有帧的 processedData）
+  const editedData = effectiveFrame.value?.processedData
+    ? new ImageData(
+        new Uint8ClampedArray(effectiveFrame.value.processedData.data),
+        effectiveFrame.value.processedData.width,
+        effectiveFrame.value.processedData.height
+      )
+    : null
+
   await processAllFrames(frames.value)
+
+  // 如果之前有画笔编辑，将恢复蒙版传播到所有帧
+  if (editedData) {
+    propagateBrushEdits(frames.value, editedData)
+  }
+
+  resetHistory()
+  if (effectiveFrame.value?.processedData) {
+    pushHistory(effectiveFrame.value.processedData)
+    updateHistoryFlags()
+  }
 }
 
 function onApplyCrop() {
   applyCrop(frames.value)
+}
+
+// ---- 画笔 Handlers ----
+function onBrushToolModeChange(mode: 'picker' | 'restore-brush') {
+  setToolMode(mode)
+}
+
+function onBrushStroke(from: { x: number; y: number }, to: { x: number; y: number }) {
+  if (!effectiveFrame.value?.processedData) return
+  restoreStroke(effectiveFrame.value, from, to)
+}
+
+function onBrushFinish() {
+  if (!effectiveFrame.value?.processedData) return
+  finishStroke(effectiveFrame.value)
+}
+
+function onBrushUndo() {
+  if (!effectiveFrame.value) return
+  undo(effectiveFrame.value)
+}
+
+function onBrushRedo() {
+  if (!effectiveFrame.value) return
+  redo(effectiveFrame.value)
 }
 
 function onResetCrop() {
@@ -331,11 +397,23 @@ function onExportSprite(framesToExport: ExtractedFrame[], config: Parameters<typ
           </div>
           <ChromaKeyPanel
             :config="chromaKeyConfig"
-            :current-frame="currentSelectedFrame"
+            :current-frame="effectiveFrame"
             :is-processing="isChromaKeyProcessing"
             :progress="chromaKeyProgress"
+            :tool-mode="brushToolMode"
+            :brush-size="brushConfig.size"
+            :brush-hardness="brushConfig.hardness"
+            :can-undo="canUndo"
+            :can-redo="canRedo"
             @apply="onApplyChromaKey"
             @preview="previewFrame"
+            @update:tool-mode="onBrushToolModeChange"
+            @update:brush-size="brushConfig.size = $event"
+            @update:brush-hardness="brushConfig.hardness = $event"
+            @undo="onBrushUndo"
+            @redo="onBrushRedo"
+            @brush-stroke="onBrushStroke"
+            @brush-finish="onBrushFinish"
           />
         </section>
 
